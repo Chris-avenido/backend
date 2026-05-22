@@ -11,23 +11,27 @@ export const getAllUsers = async () => {
   return users;
 };
 
-export const loginUser = async (email, password) => {
+export const loginUser = async (email, password, loginMethod = 'password') => {
   const user = await userRepository.findByEmail(email);
   if (!user) throw new Error('Invalid Email');
 
-  // Check if the password is a bcrypt hash (starts with $2a$ or $2b$)
-  const isBcrypt = user.password_hash;
-
   let isMatch = false;
-  if (isBcrypt) {
-    isMatch = await bcrypt.compare(password, user.password_hash);
+
+  if (loginMethod === 'passcode') {
+    isMatch = (String(user.passcode) === String(password));
   } else {
-    // Fallback to plaintext comparison
-    isMatch = (user.password_hash === password) || (user.password === password);
+    // Check if the password is a bcrypt hash (starts with $2a$ or $2b$)
+    const isBcrypt = user.password_hash;
+    if (isBcrypt) {
+      isMatch = await bcrypt.compare(password, user.password_hash);
+    } else {
+      // Fallback to plaintext comparison
+      isMatch = (user.password_hash === password) || (user.password === password);
+    }
   }
 
   if (!isMatch) {
-    throw new Error('Invalid Password');
+    throw new Error('Invalid Credentials');
   }
 
   // Omit the password from the returned object
@@ -97,7 +101,7 @@ export const registerUser = async (payload) => {
     passcode 
   } = payload;
 
-  if (verification_code !== 'DEPED-FINANCE-2026') {
+  if (verification_code !== (process.env.REGISTRATION_VERIFICATION_CODE || '6registration9')) {
     throw new Error('Invalid Admin Verification Code');
   }
 

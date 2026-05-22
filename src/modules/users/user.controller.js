@@ -17,11 +17,11 @@ export const getUsers = async (req, res) => {
 
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, loginMethod } = req.body;
     if (!email || !password) {
-      return errorResponse(res, 400, 'Email and password are required');
+      return errorResponse(res, 400, 'Email and password/passcode are required');
     }
-    const user = await userService.loginUser(email, password);
+    const user = await userService.loginUser(email, password, loginMethod);
     return successResponse(res, 200, 'Login successful', { user });
   } catch (error) {
     return errorResponse(res, 401, error.message);

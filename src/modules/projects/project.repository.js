@@ -59,7 +59,7 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
   const countsQuery = `
     SELECT 
       COUNT(*) AS total,
-      COUNT(CASE WHEN eng.status_of_construction_phase ILIKE '%progress%' THEN 1 END) AS ongoing,
+      COUNT(CASE WHEN eng.status_of_construction_phase ILIKE '%progress%' OR eng.status_of_construction_phase ILIKE '%ongoing%' THEN 1 END) AS ongoing,
       COUNT(CASE WHEN eng.status_of_construction_phase ILIKE '%complete%' THEN 1 END) AS completed,
       COUNT(CASE WHEN eng.status_of_construction_phase ILIKE '%not yet%' OR eng.status_of_construction_phase ILIKE '%pending%' THEN 1 END) AS not_started
     ${baseQuery}
@@ -72,7 +72,7 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
   const dataBindings = [...filterBindings];
   
   if (status === 'ongoing') {
-    dataQueryWhere += ` AND eng.status_of_construction_phase ILIKE '%progress%'`;
+    dataQueryWhere += ` AND (eng.status_of_construction_phase ILIKE '%progress%' OR eng.status_of_construction_phase ILIKE '%ongoing%')`;
   } else if (status === 'completed') {
     dataQueryWhere += ` AND eng.status_of_construction_phase ILIKE '%complete%'`;
   } else if (status === 'not_started') {
