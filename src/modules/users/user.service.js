@@ -1,5 +1,6 @@
 import * as userRepository from './user.repository.js';
 import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 
 /**
  * User Service
@@ -101,7 +102,7 @@ export const registerUser = async (payload) => {
     passcode 
   } = payload;
 
-  if (verification_code !== (process.env.REGISTRATION_VERIFICATION_CODE || '6registration9')) {
+  if (verification_code !== (process.env.registration_code || '6registration9')) {
     throw new Error('Invalid Admin Verification Code');
   }
 
@@ -121,6 +122,7 @@ export const registerUser = async (payload) => {
   const password_hash = await bcrypt.hash(password, 10);
 
   const userData = {
+    uid: randomUUID(),
     email,
     first_name,
     last_name,
@@ -148,4 +150,3 @@ export const registerUser = async (payload) => {
   const { password_hash: _ph, ...userWithoutPassword } = newUser[0];
   return userWithoutPassword;
 };
-
