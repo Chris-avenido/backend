@@ -31,8 +31,7 @@ export const allProjects = async () => {
 export const displayData = async ({ page = 1, limit = 10, search = '', status = '', school_id = '', region = '', division = '' }) => {
   const offset = (page - 1) * limit;
   let baseQuery = `
-    FROM engineer_form eng
-      LEFT JOIN (SELECT DISTINCT school_id FROM schools) sch ON eng.school_id = sch.school_id
+    FROM ${PROJECT_TABLE} eng
     WHERE 1=1
   `;
   const filterBindings = [];
