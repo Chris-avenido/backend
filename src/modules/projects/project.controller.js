@@ -31,3 +31,23 @@ export const displayData = async (req, res) => {
     return errorResponse(res, 500, 'Failed to fetch projects', error.message);
   }
 }
+
+export const getTrancheFund = async (req, res) => {
+  try {
+    const trancheFund = await projectService.getTrancheFund(req.params.projectId);
+    return successResponse(res, 200, 'Tranche fund retrieved successfully', trancheFund);
+  } catch (error) {
+    console.error('[ProjectController] error:', error);
+    return errorResponse(res, 400, error.message);
+  }
+};
+
+export const saveTrancheFund = async (req, res) => {
+  try {
+    const trancheFund = await projectService.saveTrancheFund(req.params.projectId, req.body);
+    return successResponse(res, 200, 'Tranche fund saved successfully', trancheFund);
+  } catch (error) {
+    console.error('[ProjectController] error:', error);
+    return errorResponse(res, 400, error.message);
+  }
+};

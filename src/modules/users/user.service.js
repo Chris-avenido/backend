@@ -1,4 +1,5 @@
 import * as userRepository from './user.repository.js';
+import { isAllowedLoginRole, UserRoles } from './user.model.js';
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 
@@ -33,6 +34,10 @@ export const loginUser = async (email, password, loginMethod = 'password') => {
 
   if (!isMatch) {
     throw new Error('Invalid Credentials');
+  }
+
+  if (!isAllowedLoginRole(user.role)) {
+    throw new Error('Access denied. Only Finance and Super User accounts can access this portal.');
   }
 
   // Omit the password from the returned object
@@ -136,7 +141,7 @@ export const registerUser = async (payload) => {
     contact_number,
     account_category,
     passcode,
-    role: 'finance', // Default role
+    role: UserRoles.FINANCE,
     registration_status: 'pending',
     password_hash,
     hash_version: 1, // Default hash version
