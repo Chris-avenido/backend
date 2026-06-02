@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import userRoutes from './modules/users/user.routes.js';
 import projectRoutes from './modules/projects/project.routes.js';
+import projectViewRoutes from './modules/project-view/project-view.routes.js';
 import db from './config/db.js';
 
 const app = express();
@@ -27,6 +28,7 @@ app.get('/', (req, res) => {
 // API Routes
 app.use('/api/users', userRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/project-view', projectViewRoutes);
 
 // Basic health check route
 app.get('/api/health', async (req, res) => {

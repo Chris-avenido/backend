@@ -2,6 +2,48 @@ import db from '../../config/db.js';
 import { PROJECT_TABLE } from './project.model.js';
 
 const TRANCHE_FUND_TABLE = 'tranche_fund';
+const FILTER_OPTIONS_TTL_MS = 5 * 60 * 1000;
+
+let filterOptionsCache = {
+  expiresAt: 0,
+  data: null
+};
+
+const getFilterOptions = async () => {
+  if (filterOptionsCache.data && filterOptionsCache.expiresAt > Date.now()) {
+    return filterOptionsCache.data;
+  }
+
+  const filterOptionsQuery = `
+    SELECT
+      (
+        SELECT COALESCE(json_agg(region ORDER BY region), '[]'::json)
+        FROM (
+          SELECT DISTINCT region
+          FROM ${PROJECT_TABLE}
+          WHERE NULLIF(TRIM(region), '') IS NOT NULL
+        ) region_options
+      ) AS regions,
+      (
+        SELECT COALESCE(json_agg(division ORDER BY division), '[]'::json)
+        FROM (
+          SELECT DISTINCT division
+          FROM ${PROJECT_TABLE}
+          WHERE NULLIF(TRIM(division), '') IS NOT NULL
+        ) division_options
+      ) AS divisions
+  `;
+
+  const filterOptionsRes = await db.raw(filterOptionsQuery);
+  const data = filterOptionsRes.rows[0] || { regions: [], divisions: [] };
+
+  filterOptionsCache = {
+    data,
+    expiresAt: Date.now() + FILTER_OPTIONS_TTL_MS
+  };
+
+  return data;
+};
 
 export const allProjects = async () => {
   const baseCte = `
@@ -80,7 +122,9 @@ export const allProjects = async () => {
 };
 
 export const displayData = async ({ page = 1, limit = 10, search = '', status = '', school_id = '', region = '', division = '' }) => {
-  const offset = (page - 1) * limit;
+  const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+  const pageLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+  const offset = (pageNumber - 1) * pageLimit;
   const filterBindings = [];
   const whereConditions = ['1=1'];
 
@@ -105,7 +149,22 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
   const rankedCte = `
     WITH ProjectRows AS (
       SELECT
-        eng.*,
+        eng.project_id,
+        eng.project_name,
+        eng.school_name,
+        eng.school_id,
+        eng.region,
+        eng.division,
+        eng.province,
+        eng.municipality,
+        eng.district,
+        eng.status_of_construction_phase,
+        eng.accomplishment_percentage,
+        eng.contract_amount,
+        eng.contractor_name,
+        eng.pcab_license_number,
+        eng.approved_budget_for_contract,
+        eng.batch_of_funds,
         COALESCE(eng.ipc, eng.school_id || '-' || eng.project_name) AS project_key,
         COALESCE(tf.tranche_1, 0) AS tranche_1,
         COALESCE(tf.tranche_2, 0) AS tranche_2,
@@ -137,7 +196,7 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
       ) tf ON true
       WHERE ${whereConditions.join(' AND ')}
     ),
-    RankedProjects AS (
+    RankedProjects AS MATERIALIZED (
       SELECT *
       FROM (
         SELECT
@@ -149,21 +208,16 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
         FROM ProjectRows
       ) ranked
       WHERE row_rank = 1
-    )
+    ),
+    StatusCounts AS (
+      SELECT
+        COUNT(*) AS total,
+        COUNT(CASE WHEN tranche_1 > 0 THEN 1 END) AS tranche_1,
+        COUNT(CASE WHEN tranche_2 > 0 THEN 1 END) AS tranche_2,
+        COUNT(CASE WHEN tranche_3 > 0 THEN 1 END) AS tranche_3
+      FROM RankedProjects
+    ),
   `;
-
-  // 2. Calculate tranche counts after de-duplicating projects.
-  const countsQuery = `
-    ${rankedCte}
-    SELECT 
-      COUNT(*) AS total,
-      COUNT(CASE WHEN tranche_1 > 0 THEN 1 END) AS tranche_1,
-      COUNT(CASE WHEN tranche_2 > 0 THEN 1 END) AS tranche_2,
-      COUNT(CASE WHEN tranche_3 > 0 THEN 1 END) AS tranche_3
-    FROM RankedProjects
-  `;
-  const countsRes = await db.raw(countsQuery, filterBindings);
-  const statusCounts = countsRes.rows[0];
 
   // 3. Apply the specific tranche filter for pagination and data.
   const dataBindings = [...filterBindings];
@@ -175,80 +229,73 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
 
   const finalWhere = finalConditions.length > 0 ? `WHERE ${finalConditions.join(' AND ')}` : '';
 
-  const countQuery = `${rankedCte} SELECT COUNT(*) FROM RankedProjects ${finalWhere}`;
-  const countRes = await db.raw(countQuery, dataBindings);
-  const total = parseInt(countRes.rows[0].count, 10);
-
-  const filterOptionsQuery = `
-    SELECT
-      (
-        SELECT COALESCE(json_agg(region ORDER BY region), '[]'::json)
-        FROM (
-          SELECT DISTINCT region
-          FROM ${PROJECT_TABLE}
-          WHERE NULLIF(TRIM(region), '') IS NOT NULL
-        ) region_options
-      ) AS regions,
-      (
-        SELECT COALESCE(json_agg(division ORDER BY division), '[]'::json)
-        FROM (
-          SELECT DISTINCT division
-          FROM ${PROJECT_TABLE}
-          WHERE NULLIF(TRIM(division), '') IS NOT NULL
-        ) division_options
-      ) AS divisions
-  `;
-  const filterOptionsRes = await db.raw(filterOptionsQuery);
-  const filterOptions = filterOptionsRes.rows[0] || { regions: [], divisions: [] };
-
   const dataQuery = `
     ${rankedCte}
+    FilteredProjects AS MATERIALIZED (
+      SELECT * FROM RankedProjects ${finalWhere}
+    ),
+    FilteredCount AS (
+      SELECT COUNT(*) AS total FROM FilteredProjects
+    ),
+    PageRows AS (
+      SELECT
+        project_id,
+        project_name,
+        school_name,
+        school_id,
+        region,
+        division,
+        province,
+        municipality,
+        district,
+        status_of_construction_phase,
+        accomplishment_percentage,
+        contract_amount,
+        contractor_name,
+        pcab_license_number,
+        CASE
+          WHEN NULLIF(regexp_replace(accomplishment_percentage::text, '[^0-9.]', '', 'g'), '')::numeric = 0 THEN 'New'
+          WHEN NULLIF(regexp_replace(accomplishment_percentage::text, '[^0-9.]', '', 'g'), '')::numeric = 100 THEN 'Completed'
+          ELSE 'Under Construction'
+        END AS accomplishment_status,
+        approved_budget_for_contract,
+        tranche_1,
+        tranche_2,
+        tranche_3,
+        tranche_flag,
+        latest_tranche_number,
+        CASE
+          WHEN tranche_3 > 0 THEN 'Tranche 3'
+          WHEN tranche_2 > 0 THEN 'Tranche 2'
+          WHEN tranche_1 > 0 THEN 'Tranche 1'
+          ELSE 'No Tranche'
+        END AS latest_tranche_status,
+        batch_of_funds
+      FROM FilteredProjects
+      ORDER BY latest_tranche_number DESC, project_id ASC
+      LIMIT ? OFFSET ?
+    )
     SELECT
-      project_id,
-      project_name,
-      school_name,
-      school_id,
-      region,
-      division,
-      province,
-      municipality,
-      district,
-      status_of_construction_phase,
-      accomplishment_percentage,
-      contract_amount,
-      contractor_name,
-      pcab_license_number,
-      CASE
-        WHEN NULLIF(regexp_replace(accomplishment_percentage::text, '[^0-9.]', '', 'g'), '')::numeric = 0 THEN 'New'
-        WHEN NULLIF(regexp_replace(accomplishment_percentage::text, '[^0-9.]', '', 'g'), '')::numeric = 100 THEN 'Completed'
-        ELSE 'Under Construction'
-      END AS accomplishment_status,
-      approved_budget_for_contract,
-      tranche_1,
-      tranche_2,
-      tranche_3,
-      tranche_flag,
-      latest_tranche_number,
-      CASE
-        WHEN tranche_3 > 0 THEN 'Tranche 3'
-        WHEN tranche_2 > 0 THEN 'Tranche 2'
-        WHEN tranche_1 > 0 THEN 'Tranche 1'
-        ELSE 'No Tranche'
-      END AS latest_tranche_status,
-      batch_of_funds
-    FROM RankedProjects
-    ${finalWhere}
-    ORDER BY latest_tranche_number DESC, project_id ASC LIMIT ? OFFSET ?
+      COALESCE((SELECT json_agg(PageRows ORDER BY latest_tranche_number DESC, project_id ASC) FROM PageRows), '[]'::json) AS data,
+      (SELECT total FROM FilteredCount) AS total,
+      (SELECT row_to_json(StatusCounts) FROM StatusCounts) AS status_counts
   `;
-  dataBindings.push(limit, offset);
+  dataBindings.push(pageLimit, offset);
 
-  const dataRes = await db.raw(dataQuery, dataBindings);
+  const [dataRes, filterOptions] = await Promise.all([
+    db.raw(dataQuery, dataBindings),
+    getFilterOptions()
+  ]);
+
+  const result = dataRes.rows[0] || {};
+  const statusCounts = result.status_counts || {};
+  const total = parseInt(result.total || 0, 10);
 
   return {
-    data: dataRes.rows,
+    data: result.data || [],
     total,
-    page: parseInt(page, 10),
-    limit: parseInt(limit, 10),
+    page: pageNumber,
+    limit: pageLimit,
     statusCounts: {
       total: parseInt(statusCounts.total || 0, 10),
       tranche_1: parseInt(statusCounts.tranche_1 || 0, 10),
