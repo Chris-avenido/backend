@@ -35,23 +35,55 @@ export const getTrancheFund = async (projectId) => {
 export const saveTrancheFund = async (projectId, payload) => {
   if (!projectId) throw new Error('Project ID is required');
 
+  const project = await projectRepository.findProjectById(projectId);
+  if (!project) throw new Error('Project not found');
+  const budget = Number(project.approved_budget_for_contract) || 0;
+
+  const existingFund = await projectRepository.findTrancheFundByProjectId(projectId);
+
   const trancheData = {
     tranche_1: toAmount(payload.tranche_1),
     tranche_2: toAmount(payload.tranche_2),
-    tranche_3: toAmount(payload.tranche_3)
+    tranche_3: toAmount(payload.tranche_3),
+    tranche_1_liquidated: toAmount(payload.tranche_1_liquidated),
+    tranche_2_liquidated: toAmount(payload.tranche_2_liquidated),
+    tranche_3_liquidated: toAmount(payload.tranche_3_liquidated)
   };
 
-  if (hasAmount(trancheData.tranche_2) && !hasAmount(trancheData.tranche_1)) {
-    throw new Error('Tranche 1 must be released before Tranche 2');
+  const isConfirmed = {
+    is_tranche_1_confirmed: payload.is_tranche_1_confirmed ?? existingFund?.is_tranche_1_confirmed ?? false,
+    is_tranche_2_confirmed: payload.is_tranche_2_confirmed ?? existingFund?.is_tranche_2_confirmed ?? false,
+    is_tranche_3_confirmed: payload.is_tranche_3_confirmed ?? existingFund?.is_tranche_3_confirmed ?? false,
+  };
+
+  const calcTranchePerc = (released, liquidated) => (released > 0 ? (liquidated / released) * 100 : 0);
+
+  const t1_perc = calcTranchePerc(trancheData.tranche_1, trancheData.tranche_1_liquidated);
+  const t2_perc = calcTranchePerc(trancheData.tranche_2, trancheData.tranche_2_liquidated);
+
+  // Business Rule Validation
+  if (hasAmount(trancheData.tranche_2)) {
+    if (!isConfirmed.is_tranche_1_confirmed) {
+      throw new Error('Tranche 1 must be confirmed and locked before Tranche 2 can be updated.');
+    }
+    if (t1_perc < 100) {
+      throw new Error('Tranche 1 must be 100% liquidated to unlock Tranche 2.');
+    }
   }
 
-  if (hasAmount(trancheData.tranche_3) && !hasAmount(trancheData.tranche_2)) {
-    throw new Error('Tranche 2 must be released before Tranche 3');
+  if (hasAmount(trancheData.tranche_3)) {
+    if (!isConfirmed.is_tranche_2_confirmed) {
+      throw new Error('Tranche 2 must be confirmed and locked before Tranche 3 can be updated.');
+    }
+    if (t2_perc < 100) {
+      throw new Error('Tranche 2 must be 100% liquidated to unlock Tranche 3.');
+    }
   }
 
   const userId = Number(payload.user_id);
   const savedRows = await projectRepository.saveTrancheFund(projectId, {
     ...trancheData,
+    ...isConfirmed,
     tranche_flag: getTrancheFlag(trancheData),
     user_id: Number.isFinite(userId) ? userId : 0,
     remarks: payload.remarks || null

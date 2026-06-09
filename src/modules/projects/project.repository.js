@@ -308,6 +308,12 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
   };
 };
 
+export const findProjectById = async (projectId) => {
+  return await db(PROJECT_TABLE)
+    .where({ project_id: projectId })
+    .first();
+};
+
 export const findTrancheFundByProjectId = async (projectId) => {
   return await db(TRANCHE_FUND_TABLE)
     .where({ project_id: projectId })
