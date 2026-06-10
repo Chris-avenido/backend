@@ -41,13 +41,28 @@ export const saveTrancheFund = async (projectId, payload) => {
 
   const existingFund = await projectRepository.findTrancheFundByProjectId(projectId);
 
+const toDate = (value) => {
+  if (!value) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) {
+    throw new Error(`Invalid date format: ${value}`);
+  }
+  return d.toISOString().split('T')[0];
+};
+
   const trancheData = {
     tranche_1: toAmount(payload.tranche_1),
     tranche_2: toAmount(payload.tranche_2),
     tranche_3: toAmount(payload.tranche_3),
     tranche_1_liquidated: toAmount(payload.tranche_1_liquidated),
     tranche_2_liquidated: toAmount(payload.tranche_2_liquidated),
-    tranche_3_liquidated: toAmount(payload.tranche_3_liquidated)
+    tranche_3_liquidated: toAmount(payload.tranche_3_liquidated),
+    tranche_1_release_date: toDate(payload.tranche_1_release_date),
+    tranche_1_latest_liquidation_date: toDate(payload.tranche_1_latest_liquidation_date),
+    tranche_2_release_date: toDate(payload.tranche_2_release_date),
+    tranche_2_latest_liquidation_date: toDate(payload.tranche_2_latest_liquidation_date),
+    tranche_3_release_date: toDate(payload.tranche_3_release_date),
+    tranche_3_latest_liquidation_date: toDate(payload.tranche_3_latest_liquidation_date)
   };
 
   const isConfirmed = {
@@ -62,12 +77,21 @@ export const saveTrancheFund = async (projectId, payload) => {
   const t2_perc = calcTranchePerc(trancheData.tranche_2, trancheData.tranche_2_liquidated);
 
   // Business Rule Validation
+  if (hasAmount(trancheData.tranche_1) && !trancheData.tranche_1_release_date) throw new Error('Release Date is required for Tranche 1');
+  if (hasAmount(trancheData.tranche_1_liquidated) && !trancheData.tranche_1_latest_liquidation_date) throw new Error('Liquidation Date is required for Tranche 1');
+
+  if (hasAmount(trancheData.tranche_2) && !trancheData.tranche_2_release_date) throw new Error('Release Date is required for Tranche 2');
+  if (hasAmount(trancheData.tranche_2_liquidated) && !trancheData.tranche_2_latest_liquidation_date) throw new Error('Liquidation Date is required for Tranche 2');
+
+  if (hasAmount(trancheData.tranche_3) && !trancheData.tranche_3_release_date) throw new Error('Release Date is required for Tranche 3');
+  if (hasAmount(trancheData.tranche_3_liquidated) && !trancheData.tranche_3_latest_liquidation_date) throw new Error('Liquidation Date is required for Tranche 3');
+
   if (hasAmount(trancheData.tranche_2)) {
     if (!isConfirmed.is_tranche_1_confirmed) {
       throw new Error('Tranche 1 must be confirmed and locked before Tranche 2 can be updated.');
     }
-    if (t1_perc < 100) {
-      throw new Error('Tranche 1 must be 100% liquidated to unlock Tranche 2.');
+    if (t1_perc < 50) {
+      throw new Error('Tranche 1 must be 50% liquidated to unlock Tranche 2.');
     }
   }
 
@@ -75,8 +99,8 @@ export const saveTrancheFund = async (projectId, payload) => {
     if (!isConfirmed.is_tranche_2_confirmed) {
       throw new Error('Tranche 2 must be confirmed and locked before Tranche 3 can be updated.');
     }
-    if (t2_perc < 100) {
-      throw new Error('Tranche 2 must be 100% liquidated to unlock Tranche 3.');
+    if (t2_perc < 50) {
+      throw new Error('Tranche 2 must be 50% liquidated to unlock Tranche 3.');
     }
   }
 
