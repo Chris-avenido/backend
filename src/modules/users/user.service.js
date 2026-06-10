@@ -2,6 +2,8 @@ import * as userRepository from './user.repository.js';
 import { isAllowedLoginRole, UserRoles } from './user.model.js';
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
+import jwt from 'jsonwebtoken';
+import { sendResetEmail } from '../../utils/email.js';
 
 /**
  * User Service
@@ -119,6 +121,10 @@ export const registerUser = async (payload) => {
     throw new Error('Email, First Name, and Last Name are required');
   }
 
+  if (!email.endsWith('@deped.gov.ph')) {
+    throw new Error('Email must end with @deped.gov.ph');
+  }
+
   const existingEmail = await userRepository.findByEmail(email);
   if (existingEmail) {
     throw new Error('Email is already registered');
@@ -154,4 +160,51 @@ export const registerUser = async (payload) => {
 
   const { password_hash: _ph, ...userWithoutPassword } = newUser[0];
   return userWithoutPassword;
+};
+
+export const forgotPassword = async (email) => {
+  const user = await userRepository.findByEmail(email);
+  if (!user) {
+    throw new Error('User not found. Please check the email address.');
+  }
+
+  // Restrict password resets to Finance users only
+  if (user.role !== UserRoles.FINANCE) {
+    throw new Error('Access denied. Password reset is restricted to Finance accounts only.');
+  }
+
+  // Generate 6-digit code
+  const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const codeHash = await bcrypt.hash(resetCode, 10);
+
+  const resetSecret = process.env.JWT_SECRET || 'fallback_secret_key';
+  const resetToken = jwt.sign({ uid: user.uid, email: user.email, codeHash }, resetSecret, { expiresIn: '15m' });
+
+  await sendResetEmail(email, resetCode);
+  
+  // Return the token so the client can submit it back with the code
+  return { resetToken };
+};
+
+export const resetPassword = async (token, code, newPassword) => {
+  const resetSecret = process.env.JWT_SECRET || 'fallback_secret_key';
+  let decoded;
+  
+  try {
+    decoded = jwt.verify(token, resetSecret);
+  } catch (error) {
+    throw new Error('Invalid or expired reset session');
+  }
+
+  const isCodeValid = await bcrypt.compare(code, decoded.codeHash);
+  if (!isCodeValid) {
+    throw new Error('Invalid verification code');
+  }
+
+  const user = await userRepository.findById(decoded.uid);
+  if (!user) throw new Error('User not found');
+
+  const password_hash = await bcrypt.hash(newPassword, 10);
+  await userRepository.update(user.uid, { password_hash });
+  return true;
 };

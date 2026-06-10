@@ -70,3 +70,26 @@ export const register = async (req, res) => {
     return errorResponse(res, statusCode, error.message);
   }
 };
+
+export const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return errorResponse(res, 400, 'Email is required');
+    const result = await userService.forgotPassword(email);
+    
+    return successResponse(res, 200, 'Password reset email sent', { token: result.resetToken });
+  } catch (error) {
+    return errorResponse(res, 400, error.message);
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, code, newPassword } = req.body;
+    if (!token || !code || !newPassword) return errorResponse(res, 400, 'Token, code, and new password are required');
+    await userService.resetPassword(token, code, newPassword);
+    return successResponse(res, 200, 'Password updated successfully');
+  } catch (error) {
+    return errorResponse(res, 400, error.message);
+  }
+};

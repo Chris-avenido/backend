@@ -22,4 +22,10 @@ router.put('/:uid', userController.updateUser);
 // POST /api/users/:uid/verify-passcode
 router.post('/:uid/verify-passcode', userController.verifyPasscode);
 
+// POST /api/users/forgot-password
+router.post('/forgot-password', userController.forgotPassword);
+
+// POST /api/users/reset-password
+router.post('/reset-password', userController.resetPassword);
+
 export default router;
