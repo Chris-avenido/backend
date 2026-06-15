@@ -1,8 +1,8 @@
 import * as projectRepository from './project.repository.js';
 
 
-export const allProjects = async () => {
-  return await projectRepository.allProjects();
+export const allProjects = async (query = {}) => {
+  return await projectRepository.allProjects(query);
 };
 
 export const displayData = async (queryParams) => {

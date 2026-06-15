@@ -31,11 +31,19 @@ const getFilterOptions = async () => {
           FROM ${PROJECT_TABLE}
           WHERE NULLIF(TRIM(division), '') IS NOT NULL
         ) division_options
-      ) AS divisions
+      ) AS divisions,
+      (
+        SELECT COALESCE(json_agg(project_name ORDER BY project_name), '[]'::json)
+        FROM (
+          SELECT DISTINCT project_name
+          FROM ${PROJECT_TABLE}
+          WHERE NULLIF(TRIM(project_name), '') IS NOT NULL
+        ) project_name_options
+      ) AS project_names
   `;
 
   const filterOptionsRes = await db.raw(filterOptionsQuery);
-  const data = filterOptionsRes.rows[0] || { regions: [], divisions: [] };
+  const data = filterOptionsRes.rows[0] || { regions: [], divisions: [], project_names: [] };
 
   filterOptionsCache = {
     data,
@@ -45,7 +53,23 @@ const getFilterOptions = async () => {
   return data;
 };
 
-export const allProjects = async () => {
+export const allProjects = async ({ region = '', division = '', project_name = '' } = {}) => {
+  const filterBindings = [];
+  const whereConditions = ['1=1'];
+
+  if (project_name) {
+    whereConditions.push(`eng.project_name = ?`);
+    filterBindings.push(project_name);
+  }
+  if (region) {
+    whereConditions.push(`eng.region = ?`);
+    filterBindings.push(region);
+  }
+  if (division) {
+    whereConditions.push(`eng.division = ?`);
+    filterBindings.push(division);
+  }
+
   const baseCte = `
     WITH ProjectRows AS (
       SELECT
@@ -53,6 +77,9 @@ export const allProjects = async () => {
         eng.school_id,
         eng.project_category,
         eng.region,
+        eng.latitude,
+        eng.longitude,
+        eng.school_name,
         eng.approved_budget_for_contract,
         COALESCE(eng.ipc, eng.school_id || '-' || eng.project_name) AS project_key,
         GREATEST(
@@ -71,10 +98,14 @@ export const allProjects = async () => {
         ) AS latest_tranche_number,
         COALESCE(tf.tranche_1, 0) AS tranche_1,
         COALESCE(tf.tranche_2, 0) AS tranche_2,
-        COALESCE(tf.tranche_3, 0) AS tranche_3
+        COALESCE(tf.tranche_3, 0) AS tranche_3,
+        tf.id AS tf_id,
+        tf.tranche_1_release_date,
+        tf.tranche_2_release_date,
+        tf.tranche_3_release_date
       FROM ${PROJECT_TABLE} eng
       LEFT JOIN LATERAL (
-        SELECT tranche_1, tranche_2, tranche_3, tranche_flag
+        SELECT id, tranche_1, tranche_2, tranche_3, tranche_flag, tranche_1_release_date, tranche_2_release_date, tranche_3_release_date
         FROM ${TRANCHE_FUND_TABLE}
         WHERE project_id = eng.project_id
         ORDER BY
@@ -82,6 +113,7 @@ export const allProjects = async () => {
           id DESC
         LIMIT 1
       ) tf ON true
+      WHERE ${whereConditions.join(' AND ')}
     ),
     Deduped AS (
       SELECT *
@@ -98,7 +130,7 @@ export const allProjects = async () => {
     )
   `;
 
-  const [totalRes, categoryRes, regionRes] = await Promise.all([
+  const [totalRes, categoryRes, regionRes, dailyTrendRes, mapDataRes] = await Promise.all([
     db.raw(baseCte + `
       SELECT
         COUNT(*) AS total_project,
@@ -107,18 +139,61 @@ export const allProjects = async () => {
         COUNT(CASE WHEN tranche_1 > 0 THEN 1 END) AS tranche_1_count,
         COUNT(CASE WHEN tranche_2 > 0 THEN 1 END) AS tranche_2_count,
         COUNT(CASE WHEN tranche_3 > 0 THEN 1 END) AS tranche_3_count,
+        COUNT(CASE WHEN tf_id IS NULL THEN 1 END) AS na_count,
+        COUNT(CASE WHEN tf_id IS NOT NULL THEN 1 END) AS total_tranche_fund,
         COALESCE(SUM(tranche_1), 0) AS tranche_1_amount,
         COALESCE(SUM(tranche_2), 0) AS tranche_2_amount,
         COALESCE(SUM(tranche_3), 0) AS tranche_3_amount
       FROM Deduped
-    `),
+    `, filterBindings),
 
-    db.raw(baseCte + `SELECT project_category, COUNT(*) AS count FROM Deduped GROUP BY project_category`),
+    db.raw(baseCte + `SELECT project_category, COUNT(*) AS count FROM Deduped GROUP BY project_category`, filterBindings),
 
-    db.raw(baseCte + `SELECT region, COUNT(*) AS count FROM Deduped GROUP BY region`),
+    db.raw(baseCte + `SELECT region, COUNT(*) AS count FROM Deduped GROUP BY region`, filterBindings),
+
+    db.raw(baseCte + `
+      SELECT 
+        TO_CHAR(u.date, 'YYYY-MM-DD') AS date,
+        SUM(u.t1) AS tranche_1,
+        SUM(u.t2) AS tranche_2,
+        SUM(u.t3) AS tranche_3
+      FROM (
+        SELECT tranche_1_release_date AS date, CASE WHEN tranche_1 > 0 THEN 1 ELSE 0 END AS t1, 0 AS t2, 0 AS t3
+        FROM Deduped WHERE tranche_1_release_date IS NOT NULL
+        UNION ALL
+        SELECT tranche_2_release_date AS date, 0 AS t1, CASE WHEN tranche_2 > 0 THEN 1 ELSE 0 END AS t2, 0 AS t3
+        FROM Deduped WHERE tranche_2_release_date IS NOT NULL
+        UNION ALL
+        SELECT tranche_3_release_date AS date, 0 AS t1, 0 AS t2, CASE WHEN tranche_3 > 0 THEN 1 ELSE 0 END AS t3
+        FROM Deduped WHERE tranche_3_release_date IS NOT NULL
+      ) u
+      GROUP BY TO_CHAR(u.date, 'YYYY-MM-DD')
+      ORDER BY date ASC
+    `, filterBindings),
+
+    db.raw(baseCte + `
+      SELECT 
+        project_id,
+        school_name,
+        project_category,
+        latitude,
+        longitude,
+        tf_id,
+        tranche_1,
+        tranche_2,
+        tranche_3
+      FROM Deduped 
+      WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND NULLIF(latitude, '') IS NOT NULL AND NULLIF(longitude, '') IS NOT NULL
+    `, filterBindings),
   ]);
 
-  return { summary: totalRes.rows[0], categories: categoryRes.rows, regions: regionRes.rows, };
+  return {
+    summary: totalRes.rows[0],
+    dailyTrend: dailyTrendRes.rows,
+    categories: categoryRes.rows,
+    regions: regionRes.rows,
+    mapData: mapDataRes.rows,
+  };
 };
 
 export const displayData = async ({ page = 1, limit = 10, search = '', status = '', school_id = '', region = '', division = '' }) => {
@@ -130,8 +205,8 @@ export const displayData = async ({ page = 1, limit = 10, search = '', status = 
 
   // 1. Apply global filters that affect counts
   if (search) {
-    whereConditions.push(`(eng.project_id::text ILIKE ? OR eng.project_name ILIKE ? OR eng.school_name ILIKE ?)`);
-    filterBindings.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    whereConditions.push(`(eng.project_id::text ILIKE ? OR eng.project_name ILIKE ? OR eng.school_name ILIKE ? OR eng.region ILIKE ? OR eng.division ILIKE ?)`);
+    filterBindings.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (school_id) {
     whereConditions.push(`eng.school_id ILIKE ?`);

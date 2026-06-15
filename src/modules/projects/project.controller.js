@@ -13,14 +13,13 @@ import { successResponse, errorResponse } from '../../utils/response.js';
 
 export const allProjects = async (req, res) => {
   try {
-    const projects = await projectService.allProjects();
+    const projects = await projectService.allProjects(req.query);
     return successResponse(res, 200, 'Projects retrieved successfully', projects);
   } catch (error) {
     console.error('[UserController] error:', error);
     return errorResponse(res, 500, 'Failed to fetch projects', error.message);
   }
 };
-
 
 export const displayData = async (req, res) => {
   try {
